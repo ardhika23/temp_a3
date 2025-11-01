@@ -152,41 +152,55 @@ class OASIS2DDataset(Dataset):
 # ---------------------------------------------------------------------------
 class HipMRI2DDataset(Dataset):
     """
-    HipMRI 2D processed slices at (typical):
-      /home/groups/comp3710/HipMRI_Study_open/keras_slices_data
+    Rangpur layout:
 
-    I'll keep the canonical layout like:
-      root/train/images/*.npy
-      root/train/masks/*.npy
-    so you can mirror it in your $HOME if needed.
+        keras_slices_train          -> images (train)
+        keras_slices_seg_train      -> masks  (train)
+        keras_slices_validate       -> images (val)
+        keras_slices_seg_validate   -> masks  (val)
+        keras_slices_test           -> images (test)
+        keras_slices_seg_test       -> masks  (test)
+
+    NOTE:
+    - slices have different widths (e.g. 256x128, 256x144)
+    - we will RESIZE to (256, 256) so DataLoader can stack batches
     """
 
-    def __init__(self, root: str, split: str = "train", transform=None):
+    SPLIT_MAP = {
+        "train": ("keras_slices_train", "keras_slices_seg_train"),
+        "val": ("keras_slices_validate", "keras_slices_seg_validate"),
+        "validate": ("keras_slices_validate", "keras_slices_seg_validate"),
+        "test": ("keras_slices_test", "keras_slices_seg_test"),
+    }
+
+    def __init__(self, root: str, split: str = "train", transform=None, target_size=(256, 256)):
+        assert nib is not None, "Please install nibabel to read .nii.gz HipMRI slices"
         self.root = root
         self.split = split
         self.transform = transform or to_tensor_2d
+        self.target_size = target_size  # (H, W)
 
-        img_dir = os.path.join(root, split, "images")
-        mask_dir = os.path.join(root, split, "masks")
+        if split not in self.SPLIT_MAP:
+            raise ValueError(f"HipMRI2DDataset: unknown split {split}")
+
+        img_dirname, mask_dirname = self.SPLIT_MAP[split]
+        img_dir = os.path.join(root, img_dirname)
+        mask_dir = os.path.join(root, mask_dirname)
 
         if not os.path.isdir(img_dir):
-            raise FileNotFoundError(
-                f"HipMRI2DDataset: cannot find images dir at {img_dir} "
-                f"(root={root}, split={split})"
-            )
+            raise FileNotFoundError(f"HipMRI2DDataset: images dir not found: {img_dir}")
         if not os.path.isdir(mask_dir):
-            raise FileNotFoundError(
-                f"HipMRI2DDataset: cannot find masks dir at {mask_dir} "
-                f"(root={root}, split={split})"
-            )
+            raise FileNotFoundError(f"HipMRI2DDataset: masks dir not found: {mask_dir}")
 
-        self.img_paths = sorted([os.path.join(img_dir, p) for p in os.listdir(img_dir)])
-        self.mask_paths = sorted(
-            [os.path.join(mask_dir, p) for p in os.listdir(mask_dir)]
+        self.img_paths = sorted(
+            [os.path.join(img_dir, f) for f in os.listdir(img_dir)
+             if f.endswith(".nii") or f.endswith(".nii.gz")]
         )
-        assert len(self.img_paths) == len(
-            self.mask_paths
-        ), "HipMRI 2D: images and masks must have same length"
+        self.mask_paths = sorted(
+            [os.path.join(mask_dir, f) for f in os.listdir(mask_dir)
+             if f.endswith(".nii") or f.endswith(".nii.gz")]
+        )
+        assert len(self.img_paths) == len(self.mask_paths), "HipMRI 2D: images and masks count mismatch"
 
     def __len__(self):
         return len(self.img_paths)
@@ -195,24 +209,32 @@ class HipMRI2DDataset(Dataset):
         img_path = self.img_paths[idx]
         mask_path = self.mask_paths[idx]
 
-        if img_path.endswith(".npy"):
-            img = np.load(img_path)
-        else:
-            img = np.array(Image.open(img_path))
+        img_nii = nib.load(img_path)
+        mask_nii = nib.load(mask_path)
 
-        if mask_path.endswith(".npy"):
-            mask = np.load(mask_path)
-        else:
-            mask = np.array(Image.open(mask_path))
+        img = img_nii.get_fdata().astype(np.float32)   # (H,W) or (H,W,1)
+        mask = mask_nii.get_fdata().astype(np.float32)
 
+        # make image (H,W,1)
         if img.ndim == 2:
             img = np.expand_dims(img, -1)
-        img = self.transform(img)
+
+        # to tensor first
+        img = self.transform(img)  # (1,H,W)
+
+        # --- resize image & mask to same size ---
+        # we use torchvision F.resize
+        import torchvision.transforms.functional as F
+
+        img = F.resize(img, self.target_size)  # (1, 256, 256)
 
         if mask.ndim == 3:
             mask = mask[..., 0]
         mask = (mask > 0).astype(np.float32)
-        mask = torch.from_numpy(mask).unsqueeze(0)
+        mask = torch.from_numpy(mask).unsqueeze(0)      # (1,H,W)
+            # mask is still original size → resize too
+        mask = F.resize(mask, self.target_size, antialias=False)  # (1, 256, 256)
+
         return img, mask
 
 # ---------------------------------------------------------------------------

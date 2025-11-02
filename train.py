@@ -10,10 +10,10 @@ python train.py --dataset oasis2d --root /home/groups/comp3710/OASIS \
 
 # 2. Normal – HipMRI 2D
 python train.py --dataset hipmri2d --root /home/groups/comp3710/HipMRI_Study_open/keras_slices_data \
-    --model 2d-hip --epochs 15 --outdir runs/hipmri2d
+    --model 2d-hip --epochs 25 --outdir runs/hipmri2d
 
 # 3. Hard – HipMRI 3D
-python train.py --dataset hipmri3d --model 3d-improved --epochs 80 --batch-size 1 \
+python train.py --dataset hipmri3d --model 3d-improved --epochs 60 --batch-size 1 \
     --outdir runs/hipmri3d
 """
 
@@ -25,7 +25,7 @@ import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader
 
-# matplotlib di rangpur kadang headless, jadi kita amankan
+# matplotlib di rangpur kadang headless
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -35,11 +35,16 @@ from dataset import get_dataset
 
 
 def dice_coef(pred, target, eps=1e-6):
+    """
+    Dice untuk segmentation biner.
+    Dibikin clamp supaya gak pernah > 1 gara-gara floating error.
+    """
     pred = torch.sigmoid(pred)
     pred = (pred > 0.5).float()
     inter = (pred * target).sum()
     union = pred.sum() + target.sum()
-    return (2 * inter + eps) / (union + eps)
+    dice = (2 * inter + eps) / (union + eps)
+    return torch.clamp(dice, 0.0, 1.0)
 
 
 def save_plots(outdir, train_losses, val_losses, val_dices):
@@ -66,7 +71,7 @@ def save_plots(outdir, train_losses, val_losses, val_dices):
     plt.ylabel("dice")
     plt.savefig(os.path.join(plot_dir, "dice.png"))
     plt.close()
-    # <-- SCREENSHOT THESE FOR README.md -->
+    # <-- ini yang nanti kamu screenshot buat README -->
 
 
 def validate(model, loader, device, criterion):
@@ -121,16 +126,23 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # dataset selection
+    # =========================
+    # DATASET SELECTION
+    # =========================
     if args.dataset == "hipmri3d":
         # force rangpur 3D paths
+        if args.batch_size > 2:
+            args.batch_size = 1
         train_ds = get_dataset("hipmri3d", root="", split="train")
         val_ds = get_dataset("hipmri3d", root="", split="val")
-        if args.batch-size > 2:
-            args.batch_size = 1
+        # test nanti dicoba di bawah
     else:
         train_ds = get_dataset(args.dataset, root=args.root, split="train")
         val_ds = get_dataset(args.dataset, root=args.root, split="val")
+
+    print(f"[INFO] dataset={args.dataset}")
+    print(f"[INFO] train samples = {len(train_ds)}")
+    print(f"[INFO] val samples   = {len(val_ds)}")
 
     train_loader = DataLoader(
         train_ds,
@@ -147,6 +159,9 @@ def main():
         pin_memory=True,
     )
 
+    # =========================
+    # MODEL + OPTIM
+    # =========================
     model = build_model(args.model, in_channels=1, out_channels=1).to(device)
 
     criterion = nn.BCEWithLogitsLoss()
@@ -155,6 +170,9 @@ def main():
     best_val_dice = 0.0
     train_losses, val_losses, val_dices = [], [], []
 
+    # =========================
+    # TRAIN LOOP
+    # =========================
     for epoch in range(1, args.epochs + 1):
         train_loss = train_one_epoch(model, train_loader, device, criterion, optimizer)
         val_loss, val_dice = validate(model, val_loader, device, criterion)
@@ -189,12 +207,49 @@ def main():
     # plots
     save_plots(args.outdir, train_losses, val_losses, val_dices)
 
-    # text log (for README + PR)
+    # =========================
+    # OPTIONAL TEST EVAL
+    # (kalau folder test ada → jalan, kalau gak ada → skip)
+    # =========================
+    test_loss = None
+    test_dice = None
+    try:
+        if args.dataset == "hipmri3d":
+            test_ds = get_dataset("hipmri3d", root="", split="test")
+        else:
+            test_ds = get_dataset(args.dataset, root=args.root, split="test")
+
+        print(f"[INFO] test samples  = {len(test_ds)}")
+
+        test_loader = DataLoader(
+            test_ds,
+            batch_size=1,
+            shuffle=False,
+            num_workers=args.num_workers,
+            pin_memory=True,
+        )
+
+        # load best checkpoint for testing
+        best_ckpt = torch.load(os.path.join(args.outdir, "best.pt"), map_location=device)
+        model.load_state_dict(best_ckpt["model_state"])
+
+        test_loss, test_dice = validate(model, test_loader, device, criterion)
+        print(f"[TEST] test_loss={test_loss:.4f} test_dice={test_dice:.4f}")
+    except Exception as e:
+        print(f"[TEST] skipped: {e}")
+
+    # =========================
+    # WRITE LOG
+    # =========================
     with open(os.path.join(args.outdir, "train_log.txt"), "w") as f:
         f.write(f"trained at {datetime.now()}\n")
         f.write(f"best_val_dice={best_val_dice:.4f}\n")
         for i, (tl, vl, vd) in enumerate(zip(train_losses, val_losses, val_dices), start=1):
             f.write(f"epoch {i}: train_loss={tl:.4f} val_loss={vl:.4f} val_dice={vd:.4f}\n")
+        if test_loss is not None:
+            f.write(f"test_loss={test_loss:.4f} test_dice={test_dice:.4f}\n")
+        else:
+            f.write("test_eval=skipped (no test split or load failed)\n")
 
 
 if __name__ == "__main__":

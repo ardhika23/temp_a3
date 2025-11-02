@@ -232,8 +232,8 @@ class HipMRI2DDataset(Dataset):
             mask = mask[..., 0]
         mask = (mask > 0).astype(np.float32)
         mask = torch.from_numpy(mask).unsqueeze(0)      # (1,H,W)
-            # mask is still original size → resize too
-        mask = F.resize(mask, self.target_size, antialias=False)  # (1, 256, 256)
+        # mask is still original size → resize too
+        mask = F.resize(mask, self.target_size, interpolation=Image.NEAREST, antialias=False)  # (1, 256, 256)
 
         return img, mask
 
@@ -243,56 +243,75 @@ class HipMRI2DDataset(Dataset):
 class HipMRI3DDataset(Dataset):
     """
     3D volumes (nifti) for hard difficulty.
-    Paths (adjust on Rangpur):
-      /home/groups/comp3710/HipMRI_Study_open/semantic_MRs
-      /home/groups/comp3710/HipMRI_Study_open/semantic_labels_only
-
-    NOTE: nibabel is required.
     """
-
     def __init__(self, img_root: str, mask_root: str, split: str = "train"):
         assert nib is not None, "Please install nibabel for 3D data"
         self.img_root = img_root
         self.mask_root = mask_root
         self.split = split
 
-        all_imgs = sorted(
-            [
-                f
-                for f in os.listdir(img_root)
-                if f.endswith(".nii") or f.endswith(".nii.gz")
-            ]
+        # pair by prefix, ini sudah kamu buat di versi terakhir
+        img_files = sorted(
+            [f for f in os.listdir(img_root) if f.endswith(".nii") or f.endswith(".nii.gz")]
         )
-        n = len(all_imgs)
-        # simple split
+        mask_files = sorted(
+            [f for f in os.listdir(mask_root) if f.endswith(".nii") or f.endswith(".nii.gz")]
+        )
+
+        # bikin dict mask biar gampang
+        mask_map = {}
+        for m in mask_files:
+            # contoh: B006_Week0_SEMANTIC.nii.gz -> B006_Week0
+            key = m.replace("_SEMANTIC", "").replace(".nii.gz", "").replace(".nii", "")
+            mask_map[key] = m
+
+        paired = []
+        for img in img_files:
+            # contoh: B006_Week0_LFOV.nii.gz -> B006_Week0
+            key = img.replace("_LFOV", "").replace(".nii.gz", "").replace(".nii", "")
+            if key in mask_map:
+                paired.append((img, mask_map[key]))
+
+        if not paired:
+            raise RuntimeError(
+                f"HipMRI3DDataset: still no paired files after fuzzy matching.\n"
+                f"img_root={img_root}\nmask_root={mask_root}"
+            )
+
+        # split sederhana
+        n = len(paired)
         if split == "train":
-            self.files = all_imgs[: int(0.7 * n)]
+            self.paired = paired[: int(0.7 * n)]
         elif split in ("val", "validate"):
-            self.files = all_imgs[int(0.7 * n) : int(0.85 * n)]
+            self.paired = paired[int(0.7 * n): int(0.85 * n)]
         else:
-            self.files = all_imgs[int(0.85 * n) :]
+            self.paired = paired[int(0.85 * n):]
 
     def __len__(self):
-        return len(self.files)
+        return len(self.paired)
 
     def __getitem__(self, idx):
-        fname = self.files[idx]
-        img_path = os.path.join(self.img_root, fname)
-        mask_path = os.path.join(self.mask_root, fname)
+        img_name, mask_name = self.paired[idx]
+        img_path = os.path.join(self.img_root, img_name)
+        mask_path = os.path.join(self.mask_root, mask_name)
 
         img_nii = nib.load(img_path)
         mask_nii = nib.load(mask_path)
+
         img = img_nii.get_fdata().astype(np.float32)
         mask = mask_nii.get_fdata().astype(np.float32)
 
-        # normalise per-volume
+        # normalisasi image
         img = (img - img.mean()) / (img.std() + 1e-5)
 
-        img = torch.from_numpy(img).unsqueeze(0)  # (1,Z,Y,X)
-        mask = torch.from_numpy(mask).unsqueeze(0)
+        # ⬇⬇⬇ poin penting: BINERKAN mask
+        # semua voxel >0 dianggap foreground
+        mask = (mask > 0).astype(np.float32)
+
+        img = torch.from_numpy(img).unsqueeze(0)   # (1, Z, Y, X)
+        mask = torch.from_numpy(mask).unsqueeze(0) # (1, Z, Y, X)
         return img, mask
-
-
+    
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------

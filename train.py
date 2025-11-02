@@ -1,22 +1,3 @@
-# recognition/seg-oasis-to-hipmri-<uqid>/train.py
-"""
-Training script for COMP3710 recognition tasks.
-
-Rangpur examples:
-
-# 1. Easy – OASIS 2D
-python train.py --dataset oasis2d --root /home/groups/comp3710/OASIS \
-    --model 2d --epochs 20 --outdir runs/oasis2d
-
-# 2. Normal – HipMRI 2D
-python train.py --dataset hipmri2d --root /home/groups/comp3710/HipMRI_Study_open/keras_slices_data \
-    --model 2d-hip --epochs 25 --outdir runs/hipmri2d
-
-# 3. Hard – HipMRI 3D
-python train.py --dataset hipmri3d --model 3d-improved --epochs 60 --batch-size 1 \
-    --outdir runs/hipmri3d
-"""
-
 import os
 import argparse
 from datetime import datetime
@@ -35,10 +16,6 @@ from dataset import get_dataset
 
 
 def dice_coef(pred, target, eps=1e-6):
-    """
-    Dice untuk segmentation biner.
-    Dibikin clamp supaya gak pernah > 1 gara-gara floating error.
-    """
     pred = torch.sigmoid(pred)
     pred = (pred > 0.5).float()
     inter = (pred * target).sum()
@@ -71,8 +48,6 @@ def save_plots(outdir, train_losses, val_losses, val_dices):
     plt.ylabel("dice")
     plt.savefig(os.path.join(plot_dir, "dice.png"))
     plt.close()
-    # <-- ini yang nanti kamu screenshot buat README -->
-
 
 def validate(model, loader, device, criterion):
     model.eval()
@@ -126,16 +101,13 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # =========================
     # DATASET SELECTION
-    # =========================
     if args.dataset == "hipmri3d":
-        # force rangpur 3D paths
+        # force rangpur 3D paths and keep batch small
         if args.batch_size > 2:
             args.batch_size = 1
         train_ds = get_dataset("hipmri3d", root="", split="train")
         val_ds = get_dataset("hipmri3d", root="", split="val")
-        # test nanti dicoba di bawah
     else:
         train_ds = get_dataset(args.dataset, root=args.root, split="train")
         val_ds = get_dataset(args.dataset, root=args.root, split="val")
@@ -159,9 +131,7 @@ def main():
         pin_memory=True,
     )
 
-    # =========================
     # MODEL + OPTIM
-    # =========================
     model = build_model(args.model, in_channels=1, out_channels=1).to(device)
 
     criterion = nn.BCEWithLogitsLoss()
@@ -170,9 +140,7 @@ def main():
     best_val_dice = 0.0
     train_losses, val_losses, val_dices = [], [], []
 
-    # =========================
     # TRAIN LOOP
-    # =========================
     for epoch in range(1, args.epochs + 1):
         train_loss = train_one_epoch(model, train_loader, device, criterion, optimizer)
         val_loss, val_dice = validate(model, val_loader, device, criterion)
@@ -186,7 +154,7 @@ def main():
             f"train_loss={train_loss:.4f} val_loss={val_loss:.4f} val_dice={val_dice:.4f}"
         )
 
-        # save best checkpoint
+        # save best checkpoint based on validation Dice
         if val_dice > best_val_dice:
             best_val_dice = val_dice
             torch.save(
@@ -207,10 +175,8 @@ def main():
     # plots
     save_plots(args.outdir, train_losses, val_losses, val_dices)
 
-    # =========================
     # OPTIONAL TEST EVAL
-    # (kalau folder test ada → jalan, kalau gak ada → skip)
-    # =========================
+    # (if the dataset has a real test split → run it, otherwise → skip)
     test_loss = None
     test_dice = None
     try:
@@ -229,18 +195,17 @@ def main():
             pin_memory=True,
         )
 
-        # load best checkpoint for testing
+        # load best checkpoint before testing
         best_ckpt = torch.load(os.path.join(args.outdir, "best.pt"), map_location=device)
         model.load_state_dict(best_ckpt["model_state"])
 
         test_loss, test_dice = validate(model, test_loader, device, criterion)
         print(f"[TEST] test_loss={test_loss:.4f} test_dice={test_dice:.4f}")
     except Exception as e:
+        # do not crash training if test split is missing
         print(f"[TEST] skipped: {e}")
 
-    # =========================
     # WRITE LOG
-    # =========================
     with open(os.path.join(args.outdir, "train_log.txt"), "w") as f:
         f.write(f"trained at {datetime.now()}\n")
         f.write(f"best_val_dice={best_val_dice:.4f}\n")

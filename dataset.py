@@ -1,26 +1,3 @@
-# recognition/seg-oasis-to-hipmri-<uqid>/dataset.py
-"""
-Dataset loaders for:
-- OASIS 2D segmentation (easy)
-- HipMRI 2D slices (normal)
-- HipMRI 3D volumes (hard)
-
-IMPORTANT (COMP3710):
-- Do NOT commit dataset files, .nii.gz, .npy, or generated cache to the repo.
-- In README, tell markers to mount /home/groups/comp3710/... on Rangpur.
-
-This version AUTO-DETECTS the Rangpur layout for OASIS:
-    /home/groups/comp3710/OASIS/keras_png_slices_train
-    /home/groups/comp3710/OASIS/keras_png_slices_seg_train
-    /home/groups/comp3710/OASIS/keras_png_slices_validate
-    /home/groups/comp3710/OASIS/keras_png_slices_seg_validate
-    /home/groups/comp3710/OASIS/keras_png_slices_test
-    /home/groups/comp3710/OASIS/keras_png_slices_seg_test
-
-but still supports the "canonical" layout:
-    root/train/images, root/train/masks, ...
-"""
-
 import os
 from typing import Optional, Dict, Tuple, List
 
@@ -30,48 +7,21 @@ from torchvision import transforms as T
 import numpy as np
 
 try:
-    import nibabel as nib  # for 3D volumes
+    import nibabel as nib  
 except ImportError:
     nib = None
 
 from PIL import Image
 
-# ---------------------------------------------------------------------------
 # Utility transforms
-# ---------------------------------------------------------------------------
 to_tensor_2d = T.Compose(
     [
         T.ToTensor(),  # HWC [0,1]
     ]
 )
 
-
-# ---------------------------------------------------------------------------
 # OASIS 2D (auto-detect rangpur layout)
-# ---------------------------------------------------------------------------
 class OASIS2DDataset(Dataset):
-    """
-    Supports TWO layouts.
-
-    1) Canonical layout (your own machine):
-        root/
-          train/images/*.png
-          train/masks/*.png
-          val/images/...
-          test/...
-
-    2) Rangpur layout (what you showed):
-        root/
-          keras_png_slices_train/
-          keras_png_slices_seg_train/
-          keras_png_slices_validate/
-          keras_png_slices_seg_validate/
-          keras_png_slices_test/
-          keras_png_slices_seg_test/
-
-    We will detect which one exists.
-    """
-
     # map split -> (img_dirname, mask_dirname) for rangpur-style
     RANGPUR_MAP: Dict[str, Tuple[str, str]] = {
         "train": ("keras_png_slices_train", "keras_png_slices_seg_train"),
@@ -146,26 +96,8 @@ class OASIS2DDataset(Dataset):
         mask = torch.from_numpy(mask).unsqueeze(0)  # (1,H,W)
         return img, mask
 
-
-# ---------------------------------------------------------------------------
 # HipMRI 2D
-# ---------------------------------------------------------------------------
 class HipMRI2DDataset(Dataset):
-    """
-    Rangpur layout:
-
-        keras_slices_train          -> images (train)
-        keras_slices_seg_train      -> masks  (train)
-        keras_slices_validate       -> images (val)
-        keras_slices_seg_validate   -> masks  (val)
-        keras_slices_test           -> images (test)
-        keras_slices_seg_test       -> masks  (test)
-
-    NOTE:
-    - slices have different widths (e.g. 256x128, 256x144)
-    - we will RESIZE to (256, 256) so DataLoader can stack batches
-    """
-
     SPLIT_MAP = {
         "train": ("keras_slices_train", "keras_slices_seg_train"),
         "val": ("keras_slices_validate", "keras_slices_seg_validate"),
@@ -237,20 +169,15 @@ class HipMRI2DDataset(Dataset):
 
         return img, mask
 
-# ---------------------------------------------------------------------------
 # HipMRI 3D
-# ---------------------------------------------------------------------------
 class HipMRI3DDataset(Dataset):
-    """
-    3D volumes (nifti) for hard difficulty.
-    """
     def __init__(self, img_root: str, mask_root: str, split: str = "train"):
         assert nib is not None, "Please install nibabel for 3D data"
         self.img_root = img_root
         self.mask_root = mask_root
         self.split = split
 
-        # pair by prefix, ini sudah kamu buat di versi terakhir
+        # collect all image and mask files
         img_files = sorted(
             [f for f in os.listdir(img_root) if f.endswith(".nii") or f.endswith(".nii.gz")]
         )
@@ -258,16 +185,16 @@ class HipMRI3DDataset(Dataset):
             [f for f in os.listdir(mask_root) if f.endswith(".nii") or f.endswith(".nii.gz")]
         )
 
-        # bikin dict mask biar gampang
+        # build a dict for masks so we can match them by prefix
         mask_map = {}
         for m in mask_files:
-            # contoh: B006_Week0_SEMANTIC.nii.gz -> B006_Week0
+            # example: B006_Week0_SEMANTIC.nii.gz -> B006_Week0
             key = m.replace("_SEMANTIC", "").replace(".nii.gz", "").replace(".nii", "")
             mask_map[key] = m
 
         paired = []
         for img in img_files:
-            # contoh: B006_Week0_LFOV.nii.gz -> B006_Week0
+            # example: B006_Week0_LFOV.nii.gz -> B006_Week0
             key = img.replace("_LFOV", "").replace(".nii.gz", "").replace(".nii", "")
             if key in mask_map:
                 paired.append((img, mask_map[key]))
@@ -278,7 +205,7 @@ class HipMRI3DDataset(Dataset):
                 f"img_root={img_root}\nmask_root={mask_root}"
             )
 
-        # split sederhana
+        # simple 70/15/15 split
         n = len(paired)
         if split == "train":
             self.paired = paired[: int(0.7 * n)]
@@ -301,20 +228,17 @@ class HipMRI3DDataset(Dataset):
         img = img_nii.get_fdata().astype(np.float32)
         mask = mask_nii.get_fdata().astype(np.float32)
 
-        # normalisasi image
+        # normalize image volume
         img = (img - img.mean()) / (img.std() + 1e-5)
 
-        # ⬇⬇⬇ poin penting: BINERKAN mask
-        # semua voxel >0 dianggap foreground
+        # binarize mask – every voxel > 0 is foreground
         mask = (mask > 0).astype(np.float32)
 
         img = torch.from_numpy(img).unsqueeze(0)   # (1, Z, Y, X)
         mask = torch.from_numpy(mask).unsqueeze(0) # (1, Z, Y, X)
         return img, mask
     
-# ---------------------------------------------------------------------------
 # Factory
-# ---------------------------------------------------------------------------
 def get_dataset(
     name: str,
     root: str,

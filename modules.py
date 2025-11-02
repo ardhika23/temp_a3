@@ -1,26 +1,8 @@
-# recognition/seg-oasis-to-hipmri-<uqid>/modules.py
-"""
-Model components for COMP3710 Pattern Analysis
-Pathway: OASIS 2D (easy) -> HipMRI 2D (normal) -> HipMRI 3D (hard)
-
-This file contains BOTH baseline and hard versions:
-- UNet2DBaseline          : for OASIS 2D (easy)
-- UNet2DHipMRI            : slightly deeper 2D for HipMRI 2D (normal)
-- UNet3DBaseline          : plain 3D UNet for HipMRI 3D
-- UNet3DImproved          : 3D UNet with residual/context blocks (hard)
-
-If you reuse ideas from Ronneberger et al. (2015) or nnU-Net / Isensee et al.,
-CITE THEM IN README.md under "References" and mention use of GenAI tools.
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-# ---------------------------------------------------------------------------
 # Shared building blocks
-# ---------------------------------------------------------------------------
 class DoubleConv2d(nn.Module):
     def __init__(self, in_ch, out_ch):
         super().__init__()
@@ -70,9 +52,7 @@ class Up2d(nn.Module):
         return self.conv(x)
 
 
-# ---------------------------------------------------------------------------
 # 2D UNets
-# ---------------------------------------------------------------------------
 class UNet2DBaseline(nn.Module):
     """
     Really standard 2D UNet suitable for OASIS 2D.
@@ -108,11 +88,6 @@ class UNet2DBaseline(nn.Module):
 
 
 class UNet2DHipMRI(nn.Module):
-    """
-    Slightly deeper / wider 2D UNet for HipMRI 2D slices (Normal difficulty).
-    You can adjust base channels to 32 if GPU is limited.
-    """
-
     def __init__(self, n_channels=1, n_classes=1, base_ch=64):
         super().__init__()
         self.inc = DoubleConv2d(n_channels, base_ch)
@@ -138,10 +113,7 @@ class UNet2DHipMRI(nn.Module):
         x = self.up4(x, x1)
         return self.outc(x)
 
-
-# ---------------------------------------------------------------------------
 # 3D UNets
-# ---------------------------------------------------------------------------
 class DoubleConv3d(nn.Module):
     def __init__(self, in_ch, out_ch):
         super().__init__()
@@ -201,11 +173,6 @@ class Up3d(nn.Module):
 
 
 class UNet3DBaseline(nn.Module):
-    """
-    Plain 3D UNet for HipMRI / prostate 3D volumes.
-    This is the first step to HARD.
-    """
-
     def __init__(self, n_channels=1, n_classes=1):
         super().__init__()
         self.inc = DoubleConv3d(n_channels, 32)
@@ -233,11 +200,6 @@ class UNet3DBaseline(nn.Module):
 
 
 class ContextBlock3d(nn.Module):
-    """
-    Simple residual/context block to "improve" the 3D UNet.
-    This is enough to justify "Improved 3D UNet" in README.
-    """
-
     def __init__(self, ch):
         super().__init__()
         self.block = nn.Sequential(
@@ -254,11 +216,6 @@ class ContextBlock3d(nn.Module):
 
 
 class UNet3DImproved(nn.Module):
-    """
-    3D UNet with context/residual blocks – use this for the HARD run.
-    Target: Dice >= 0.7 on provided 3D set (as per spec wording).
-    """
-
     def __init__(self, n_channels=1, n_classes=1):
         super().__init__()
         self.inc = nn.Sequential(DoubleConv3d(n_channels, 32), ContextBlock3d(32))
@@ -294,10 +251,7 @@ class UNet3DImproved(nn.Module):
         x = self.cb4(x)
         return self.outc(x)
 
-
-# ---------------------------------------------------------------------------
 # Helper factory
-# ---------------------------------------------------------------------------
 def build_model(name: str, in_channels=1, out_channels=1):
     name = name.lower()
     if name == "2d":

@@ -1,16 +1,3 @@
-# recognition/seg-oasis-to-hipmri-<uqid>/predict.py
-"""
-Minimal inference / visualisation script.
-
-Example:
-python predict.py --dataset hipmri2d \
-    --root /home/groups/comp3710/HipMRI_Study_open/keras_slices_data \
-    --checkpoint runs/hipmri2d/best_model.pt --save-dir preds/
-
-This will save 2-3 sample predicted masks as .png or .npy.
-You can screenshot ONE of them for README.md
-"""
-
 import os
 import argparse
 
